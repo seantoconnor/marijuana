@@ -1,0 +1,12 @@
+# ignore the Rproj files
+*.RProj.user
+*.Rhistory
+*.DS_Store
+*.Rproj
+
+# ignore the data folders
+/analysis/data/
+/build/data/
+/build/temp/
+.Rproj.user
+"Icon\r"
