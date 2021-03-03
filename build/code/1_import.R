@@ -119,6 +119,70 @@ ztrax_import = function(state) {
   rm(asmt)
   
   
+  # and finally the transaction tables
+  trans = read_delim(here('build', 'data', 'ZTRAX', state, 'ZTrans', 'Main.txt'),
+                     delim = '|',
+                     col_names = FALSE,
+                     escape_double = FALSE,
+                     trim_ws = TRUE,
+                     col_types = cols_only(
+                       X1 = col_guess(),  # TransId
+                       X5 = col_guess(),  # DataClassStndCode
+                       X7 = col_date(),   # RecordingDate
+                       X18 = col_date(),  # DocumentDate
+                       X19 = col_date(),  # SignatureDate
+                       X25 = col_guess(), # SalesPriceAmount
+                       X31 = col_guess(), # IntraFamilyTransferFlag
+                       X33 = col_guess(), # PropertyUseStndCode
+                       X39 = col_guess(), # LenderTypeStndCode
+                       X63 = col_guess(), # LoanTypeStndCode
+                       X66 = col_guess()  # LoanTypeProgramStndCode
+                     ))
+  
+  # keep the field names in the header df
+  trans_cols = trans_cols %>%
+    filter(FieldName %in% c('TransId', 'DataClassStndCode', 'RecordingDate', 
+                            'DocumentDate', 'SignatureDate', 'SalesPriceAmount',
+                            'IntraFamilyTransferFlag', 'PropertyUseStndCode',
+                            'LenderTypeStndCode', 'LoanTypeStndCode', 
+                            'LoanTypeProgramStndCode'))
+  
+  # assign the columns
+  colnames(trans) = t(trans_cols)
+  
+  # specify function for "not %in%"
+  `%not%` = Negate(`%in%`)
+  
+  # filter for observations with non-zero and non-NA sales prices, dates,
+  # and other codes to ensure we're only dealing with the residential housing
+  # market and not things like inter-family transfers, reverse mortgages, or
+  # mortgage refinancing. See the ZTRAX transaction table documentation for
+  # full explanations of the Codes being filtered for here. Also, keeping NA
+  # values for codes since many of the observations don't have these information
+  # and we would lose a huge amount of data if we were to filter them out.
+  trans = trans %>% 
+    filter(!is.na(SalesPriceAmount),
+           SalesPriceAmount > 0,
+           DataClassStndCode %in% c('D', 'H', 'U', 'J', 'V', 'M') | is.na(DataClassStndCode),
+           IntraFamilyTransferFlag == 'N' | is.na(IntraFamilyTransferFlag),
+           PropertyUseStndCode %in% c('CD', 'CP', 'MH', 'NW', 'RR', 'SR') |
+             is.na(PropertyUseStndCode),
+           LenderTypeStndCode %not% c('RE', 'RM') | is.na(LenderTypeStndCode),
+           LoanTypeStndCode %in% c('AS', 'BL', 'CE', 'CL', 'DP', 'FE', 'FM',
+                                   'HE', 'EB', 'EX', 'FA') |
+             is.na(LoanTypeStndCode),
+           LoanTypeProgramStndCode %in% c('CV', 'FH', 'VA', 'SV') |
+             is.na(LoanTypeProgramStndCode)
+    ) %>%
+    # according to Zillow, should prefer DocumentDate to SignatureDate to
+    # RecordingDate, so coalesce creates a new column called sale_date taking
+    # this priority
+    mutate(sale_date = coalesce(DocumentDate, SignatureDate, RecordingDate)) %>%
+    select(TransId, sale_date, SalesPriceAmount)
+  
+  # convert to data.table
+  trans = as.data.table(trans)
+  
   # now to the transaction data -- use the readr package's read_delim function
   # instead of fread because we're going to specify which columns to import 
   # during the file reading. This saves a ton of memory which is important
@@ -146,7 +210,8 @@ ztrax_import = function(state) {
   colnames(prop) = t(prop_cols)
   
   # filter for first property sequence ID
-  prop = prop %>% filter(PropertySequenceNumber == 1)
+  prop = prop %>% filter(PropertySequenceNumber == 1,
+                         !is.na(ImportParcelID))
   
   # convert to data.table -- better memory management
   prop = as.data.table(prop)
@@ -154,40 +219,13 @@ ztrax_import = function(state) {
   # drop columns
   prop = prop[, .(TransId, ImportParcelID)]
   
-  # and finally the transaction table
-  trans = read_delim(here('build', 'data', 'ZTRAX', state, 'ZTrans', 'Main.txt'),
-                     delim = '|',
-                     col_names = FALSE,
-                     escape_double = FALSE,
-                     trim_ws = TRUE,
-                     col_types = cols_only(
-                       X1 = col_guess(),
-                       X7 = col_guess(),
-                       X25 = col_guess()
-                     ))
-  
-  # keep the field names in the header df
-  trans_cols = trans_cols %>%
-    filter(FieldName %in% c('TransId', 'RecordingDate', 'SalesPriceAmount'))
-  
-  # assign the columns
-  colnames(trans) = t(trans_cols)
-  
-  # filter for observations with non-zero and non-NA sales prices, dates
-  trans = trans %>% filter(!is.na(SalesPriceAmount),
-                         SalesPriceAmount > 0,
-                         !is.na(RecordingDate))
-  
-  # convert to data.table
-  trans = as.data.table(trans)
-  
   # merge the two trans tables
-  trans = merge(prop, trans, all.x = TRUE, by = "TransId")
+  trans = merge(trans, prop, by = "TransId")
   rm(prop)
   
   # merge
   asmt = fread(here("build", "temp", "ztrax", state, "asmt.csv"))
-  trans = merge(trans, asmt, all.x = TRUE, by = "ImportParcelID")
+  trans = merge(trans, asmt, by = "ImportParcelID")
   
   # drop
   rm(asmt)
