@@ -8,5 +8,6 @@
 /analysis/data/
 /build/data/
 /build/temp/
+/build/output/
 .Rproj.user
 "Icon\r"
